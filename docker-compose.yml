@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: kagebunshin
+      POSTGRES_PASSWORD: kagebunshin
+      POSTGRES_DB: kagebunshin
+    ports:
+      - "5432:5432"
+    volumes:
+      - kagebunshin-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kagebunshin -d kagebunshin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  kagebunshin-db:

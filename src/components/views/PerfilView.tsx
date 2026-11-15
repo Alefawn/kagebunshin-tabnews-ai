@@ -3,39 +3,62 @@
 import { useState } from 'react';
 import { useData } from '@/components/DataProvider';
 import { useUI } from '@/components/UIProvider';
-import type { Tema } from '@/lib/types';
-import { initials } from '@/lib/utils';
-
-const TEMAS: { valor: Tema; rotulo: string }[] = [
-  { valor: 'light', rotulo: 'Claro' },
-  { valor: 'dark', rotulo: 'Escuro' },
-  { valor: 'system', rotulo: 'Sistema' }
-];
+import { PAPEIS } from '@/lib/store';
+import { initials, mensagemErro } from '@/lib/utils';
 
 export default function PerfilView() {
-  const { data, updateProfile, setTheme } = useData();
+  const { dados, usuario, updatePerfil, alterarSenha } = useData();
   const { toast } = useUI();
-  const perfil = data.profile;
-  const [nome, setNome] = useState(perfil.nome);
-  const [cargo, setCargo] = useState(perfil.cargo);
-  const [email, setEmail] = useState(perfil.email);
-  const [telefone, setTelefone] = useState(perfil.telefone);
-  const [bio, setBio] = useState(perfil.bio);
+  const [nome, setNome] = useState(usuario.nome);
+  const [cargo, setCargo] = useState(usuario.cargo);
+  const [telefone, setTelefone] = useState(usuario.telefone);
+  const [bio, setBio] = useState(usuario.bio);
+  const [senhaAtual, setSenhaAtual] = useState('');
+  const [novaSenha, setNovaSenha] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  const [salvandoSenha, setSalvandoSenha] = useState(false);
 
-  const salvar = () => {
+  const divisao = dados.divisoes.find((item) => item.id === usuario.divisaoId);
+  const secao = dados.secoes.find((item) => item.id === usuario.secaoId);
+
+  const salvar = async () => {
     const valorNome = nome.trim();
     if (!valorNome) {
       toast('Informe o nome do perfil.', 'error');
       return;
     }
-    updateProfile({
-      nome: valorNome,
-      cargo: cargo.trim(),
-      email: email.trim(),
-      telefone: telefone.trim(),
-      bio: bio.trim()
-    });
-    toast('Perfil salvo.');
+    setSalvando(true);
+    try {
+      await updatePerfil({
+        nome: valorNome,
+        cargo: cargo.trim(),
+        telefone: telefone.trim(),
+        bio: bio.trim()
+      });
+      toast('Perfil salvo.');
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const salvarSenha = async () => {
+    if (novaSenha.length < 8) {
+      toast('A nova senha precisa ter pelo menos 8 caracteres.', 'error');
+      return;
+    }
+    setSalvandoSenha(true);
+    try {
+      await alterarSenha(senhaAtual, novaSenha);
+      setSenhaAtual('');
+      setNovaSenha('');
+      toast(usuario.temSenha ? 'Senha alterada.' : 'Senha definida.');
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvandoSenha(false);
+    }
   };
 
   return (
@@ -53,7 +76,9 @@ export default function PerfilView() {
           </span>
           <strong id="perfil-preview-nome">{nome || 'Sem nome'}</strong>
           <small id="perfil-preview-cargo">{cargo || 'Sem cargo'}</small>
-          <span className="badge">{email || 'Sem e-mail'}</span>
+          <span className="badge">{usuario.email}</span>
+          <span className={'badge badge-' + usuario.papel}>{PAPEIS[usuario.papel]}</span>
+          {usuario.temGoogle ? <span className="badge badge-accent">Conta Google vinculada</span> : null}
         </div>
         <div className="card profile-form">
           <div className="form-grid">
@@ -81,14 +106,7 @@ export default function PerfilView() {
             </div>
             <div className="field">
               <label htmlFor="perfil-email">E-mail</label>
-              <input
-                className="input"
-                id="perfil-email"
-                type="email"
-                maxLength={90}
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
+              <input className="input" id="perfil-email" type="email" value={usuario.email} disabled readOnly />
             </div>
             <div className="field">
               <label htmlFor="perfil-telefone">Telefone</label>
@@ -101,6 +119,32 @@ export default function PerfilView() {
                 onChange={(event) => setTelefone(event.target.value)}
               />
             </div>
+            <div className="field">
+              <label htmlFor="perfil-papel">Papel</label>
+              <input className="input" id="perfil-papel" type="text" value={PAPEIS[usuario.papel]} disabled readOnly />
+            </div>
+            <div className="field">
+              <label htmlFor="perfil-divisao">Divisão</label>
+              <input
+                className="input"
+                id="perfil-divisao"
+                type="text"
+                value={divisao ? divisao.nome : 'Sem divisão'}
+                disabled
+                readOnly
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="perfil-secao">Seção</label>
+              <input
+                className="input"
+                id="perfil-secao"
+                type="text"
+                value={secao ? secao.nome : 'Sem seção'}
+                disabled
+                readOnly
+              />
+            </div>
             <div className="field span-2">
               <label htmlFor="perfil-bio">Bio</label>
               <textarea
@@ -111,29 +155,50 @@ export default function PerfilView() {
                 onChange={(event) => setBio(event.target.value)}
               />
             </div>
-            <div className="field span-2">
-              <label>Tema</label>
-              <div className="segmented" id="perfil-tema" role="group" aria-label="Tema da interface">
-                {TEMAS.map((item) => (
-                  <button
-                    type="button"
-                    data-tema={item.valor}
-                    className={data.theme === item.valor ? 'active' : ''}
-                    key={item.valor}
-                    onClick={() => {
-                      setTheme(item.valor);
-                      toast('Tema atualizado.');
-                    }}
-                  >
-                    {item.rotulo}
-                  </button>
-                ))}
+          </div>
+          <div className="form-actions">
+            <button className="btn btn-primary" type="button" onClick={salvar} disabled={salvando}>
+              Salvar perfil
+            </button>
+          </div>
+        </div>
+        <div className="card settings-card">
+          <h3>{usuario.temSenha ? 'Alterar senha' : 'Definir senha'}</h3>
+          <p>
+            {usuario.temSenha
+              ? 'Informe a senha atual e a nova senha com pelo menos 8 caracteres.'
+              : 'Sua conta ainda não tem senha. Defina uma com pelo menos 8 caracteres.'}
+          </p>
+          <div className="form-grid">
+            {usuario.temSenha ? (
+              <div className="field span-2">
+                <label htmlFor="perfil-senha-atual">Senha atual</label>
+                <input
+                  className="input"
+                  id="perfil-senha-atual"
+                  type="password"
+                  autoComplete="current-password"
+                  value={senhaAtual}
+                  onChange={(event) => setSenhaAtual(event.target.value)}
+                />
               </div>
+            ) : null}
+            <div className="field span-2">
+              <label htmlFor="perfil-senha-nova">Nova senha</label>
+              <input
+                className="input"
+                id="perfil-senha-nova"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                value={novaSenha}
+                onChange={(event) => setNovaSenha(event.target.value)}
+              />
             </div>
           </div>
           <div className="form-actions">
-            <button className="btn btn-primary" type="button" onClick={salvar}>
-              Salvar perfil
+            <button className="btn" type="button" onClick={salvarSenha} disabled={salvandoSenha}>
+              {usuario.temSenha ? 'Alterar senha' : 'Definir senha'}
             </button>
           </div>
         </div>

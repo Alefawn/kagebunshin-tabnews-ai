@@ -4,9 +4,10 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useData } from '@/components/DataProvider';
 import { Modal, useUI } from '@/components/UIProvider';
+import { podeCriarItem, podeEditarItem, podeExcluirItem, podeGerenciarColunas } from '@/lib/permissoes';
 import { PRIORIDADES, PRIORIDADE_VALORES, byOrdem, lastColumnId } from '@/lib/store';
 import type { Coluna, Missao, Prioridade } from '@/lib/types';
-import { formatDate, safeColor, todayISO } from '@/lib/utils';
+import { formatDate, mensagemErro, safeColor, todayISO } from '@/lib/utils';
 
 export function MissaoFormModal({
   missao,
@@ -17,41 +18,71 @@ export function MissaoFormModal({
   colunaId?: string;
   onClose: () => void;
 }) {
-  const { data, addMissao, updateMissao, removeMissao } = useData();
+  const { dados, usuario, addMissao, updateMissao, removeMissao } = useData();
   const { toast, confirm } = useUI();
   const edicao = Boolean(missao);
-  const colunaAtual = missao ? missao.colunaId : colunaId || (data.colunas[0] ? data.colunas[0].id : '');
+  const editavel = missao ? podeEditarItem(usuario, missao) : true;
+  const podeExcluir = missao ? podeExcluirItem(usuario, missao) : false;
+  const colunaAtual = missao ? missao.colunaId : colunaId || (dados.colunas[0] ? dados.colunas[0].id : '');
+
+  const opcoesSecao = dados.secoes.filter((item) =>
+    podeCriarItem(usuario, { divisaoId: item.divisaoId, secaoId: item.id })
+  );
+  const secaoAtual =
+    missao && missao.secaoId && !opcoesSecao.some((item) => item.id === missao.secaoId)
+      ? dados.secoes.find((item) => item.id === missao.secaoId)
+      : undefined;
+  const secoes = secaoAtual ? [secaoAtual, ...opcoesSecao] : opcoesSecao;
+  const divisoesSemSecao = dados.divisoes.filter((item) =>
+    podeCriarItem(usuario, { divisaoId: item.id, secaoId: '' })
+  );
+  const permiteSemSecao = divisoesSemSecao.length > 0;
+
   const [titulo, setTitulo] = useState(missao ? missao.titulo : '');
   const [descricao, setDescricao] = useState(missao ? missao.descricao : '');
-  const [secaoId, setSecaoId] = useState(missao ? missao.secaoId : '');
+  const [secaoId, setSecaoId] = useState(
+    missao ? missao.secaoId : permiteSemSecao ? '' : secoes[0] ? secoes[0].id : ''
+  );
+  const [divisaoId, setDivisaoId] = useState(
+    missao ? missao.divisaoId : usuario.divisaoId || (divisoesSemSecao[0] ? divisoesSemSecao[0].id : '')
+  );
   const [coluna, setColuna] = useState(colunaAtual);
   const [prioridade, setPrioridade] = useState<Prioridade>(missao ? missao.prioridade : 'media');
   const [responsavel, setResponsavel] = useState(missao ? missao.responsavel : '');
   const [prazo, setPrazo] = useState(missao ? missao.prazo : '');
+  const [salvando, setSalvando] = useState(false);
 
-  const salvar = () => {
+  const salvar = async () => {
     const valorTitulo = titulo.trim();
     if (!valorTitulo) {
       toast('Informe o título da missão.', 'error');
       return;
     }
-    const dados = {
-      titulo: valorTitulo,
-      descricao: descricao.trim(),
-      secaoId,
-      colunaId: coluna,
-      prioridade,
-      responsavel: responsavel.trim(),
-      prazo
-    };
-    if (missao) {
-      updateMissao(missao.id, dados);
-      toast('Missão atualizada.');
-    } else {
-      addMissao(dados);
-      toast('Missão criada.');
+    setSalvando(true);
+    try {
+      const dadosMissao = {
+        titulo: valorTitulo,
+        descricao: descricao.trim(),
+        secaoId,
+        divisaoId: secaoId ? undefined : divisaoId,
+        colunaId: coluna,
+        prioridade,
+        responsavel: responsavel.trim(),
+        prazo
+      };
+      if (missao) {
+        await updateMissao(missao.id, dadosMissao);
+        toast('Missão atualizada.');
+      } else {
+        await addMissao(dadosMissao);
+        toast('Missão criada.');
+      }
+      onClose();
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvando(false);
     }
-    onClose();
   };
 
   const excluir = async () => {
@@ -63,30 +94,40 @@ export function MissaoFormModal({
       danger: true
     });
     if (!ok) return;
-    removeMissao(missao.id);
-    toast('Missão excluída.');
-    onClose();
+    try {
+      await removeMissao(missao.id);
+      toast('Missão excluída.');
+      onClose();
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    }
   };
 
   return (
     <Modal
-      title={edicao ? 'Editar missão' : 'Nova missão'}
+      title={edicao ? (editavel ? 'Editar missão' : 'Missão') : 'Nova missão'}
       wide
       onClose={onClose}
       footer={
-        <>
-          {edicao ? (
-            <button type="button" className="btn btn-danger" onClick={excluir}>
-              Excluir
+        editavel ? (
+          <>
+            {podeExcluir ? (
+              <button type="button" className="btn btn-danger" onClick={excluir}>
+                Excluir
+              </button>
+            ) : null}
+            <button type="button" className="btn btn-ghost" onClick={onClose}>
+              Cancelar
             </button>
-          ) : null}
+            <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}>
+              Salvar
+            </button>
+          </>
+        ) : (
           <button type="button" className="btn btn-ghost" onClick={onClose}>
-            Cancelar
+            Fechar
           </button>
-          <button type="button" className="btn btn-primary" onClick={salvar}>
-            Salvar
-          </button>
-        </>
+        )
       }
     >
       <div className="form-grid">
@@ -98,6 +139,7 @@ export function MissaoFormModal({
             type="text"
             maxLength={90}
             value={titulo}
+            disabled={!editavel}
             onChange={(event) => setTitulo(event.target.value)}
             placeholder="Ex.: Revisar regras do firewall"
           />
@@ -109,6 +151,7 @@ export function MissaoFormModal({
             id="missao-descricao"
             maxLength={400}
             value={descricao}
+            disabled={!editavel}
             onChange={(event) => setDescricao(event.target.value)}
             placeholder="Detalhes da missão"
           />
@@ -119,25 +162,45 @@ export function MissaoFormModal({
             className="select"
             id="missao-secao"
             value={secaoId}
+            disabled={!editavel}
             onChange={(event) => setSecaoId(event.target.value)}
           >
-            <option value="">Sem seção</option>
-            {data.secoes.map((secao) => (
+            {permiteSemSecao ? <option value="">Sem seção</option> : null}
+            {secoes.map((secao) => (
               <option value={secao.id} key={secao.id}>
                 {secao.nome}
               </option>
             ))}
           </select>
         </div>
+        {permiteSemSecao && !secaoId ? (
+          <div className="field">
+            <label htmlFor="missao-divisao">Divisão</label>
+            <select
+              className="select"
+              id="missao-divisao"
+              value={divisaoId}
+              disabled={!editavel}
+              onChange={(event) => setDivisaoId(event.target.value)}
+            >
+              {divisoesSemSecao.map((divisao) => (
+                <option value={divisao.id} key={divisao.id}>
+                  {divisao.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <div className="field">
           <label htmlFor="missao-coluna">Coluna</label>
           <select
             className="select"
             id="missao-coluna"
             value={coluna}
+            disabled={!editavel}
             onChange={(event) => setColuna(event.target.value)}
           >
-            {data.colunas.map((item) => (
+            {dados.colunas.map((item) => (
               <option value={item.id} key={item.id}>
                 {item.nome}
               </option>
@@ -150,6 +213,7 @@ export function MissaoFormModal({
             className="select"
             id="missao-prioridade"
             value={prioridade}
+            disabled={!editavel}
             onChange={(event) => setPrioridade(event.target.value as Prioridade)}
           >
             {PRIORIDADE_VALORES.map((valor) => (
@@ -167,6 +231,7 @@ export function MissaoFormModal({
             type="text"
             maxLength={60}
             value={responsavel}
+            disabled={!editavel}
             onChange={(event) => setResponsavel(event.target.value)}
             placeholder="Nome do responsável"
           />
@@ -178,6 +243,7 @@ export function MissaoFormModal({
             id="missao-prazo"
             type="date"
             value={prazo}
+            disabled={!editavel}
             onChange={(event) => setPrazo(event.target.value)}
           />
         </div>
@@ -190,16 +256,24 @@ function ColunaNomeModal({ coluna, onClose }: { coluna: Coluna; onClose: () => v
   const { updateColuna } = useData();
   const { toast } = useUI();
   const [nome, setNome] = useState(coluna.nome);
+  const [salvando, setSalvando] = useState(false);
 
-  const salvar = () => {
+  const salvar = async () => {
     const valorNome = nome.trim();
     if (!valorNome) {
       toast('Informe o nome da coluna.', 'error');
       return;
     }
-    updateColuna(coluna.id, { nome: valorNome });
-    toast('Coluna renomeada.');
-    onClose();
+    setSalvando(true);
+    try {
+      await updateColuna(coluna.id, { nome: valorNome });
+      toast('Coluna renomeada.');
+      onClose();
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvando(false);
+    }
   };
 
   return (
@@ -211,7 +285,7 @@ function ColunaNomeModal({ coluna, onClose }: { coluna: Coluna; onClose: () => v
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancelar
           </button>
-          <button type="button" className="btn btn-primary" onClick={salvar}>
+          <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}>
             Salvar
           </button>
         </>
@@ -236,11 +310,19 @@ function ColunaCorModal({ coluna, onClose }: { coluna: Coluna; onClose: () => vo
   const { updateColuna } = useData();
   const { toast } = useUI();
   const [cor, setCor] = useState(safeColor(coluna.cor));
+  const [salvando, setSalvando] = useState(false);
 
-  const salvar = () => {
-    updateColuna(coluna.id, { cor });
-    toast('Cor atualizada.');
-    onClose();
+  const salvar = async () => {
+    setSalvando(true);
+    try {
+      await updateColuna(coluna.id, { cor });
+      toast('Cor atualizada.');
+      onClose();
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvando(false);
+    }
   };
 
   return (
@@ -252,7 +334,7 @@ function ColunaCorModal({ coluna, onClose }: { coluna: Coluna; onClose: () => vo
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancelar
           </button>
-          <button type="button" className="btn btn-primary" onClick={salvar}>
+          <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}>
             Salvar
           </button>
         </>
@@ -277,16 +359,24 @@ function NovaColunaModal({ onClose }: { onClose: () => void }) {
   const { toast } = useUI();
   const [nome, setNome] = useState('');
   const [cor, setCor] = useState('#64748b');
+  const [salvando, setSalvando] = useState(false);
 
-  const adicionar = () => {
+  const adicionar = async () => {
     const valorNome = nome.trim();
     if (!valorNome) {
       toast('Informe o nome da coluna.', 'error');
       return;
     }
-    addColuna(valorNome, cor);
-    toast('Coluna adicionada.');
-    onClose();
+    setSalvando(true);
+    try {
+      await addColuna(valorNome, cor);
+      toast('Coluna adicionada.');
+      onClose();
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvando(false);
+    }
   };
 
   return (
@@ -298,7 +388,7 @@ function NovaColunaModal({ onClose }: { onClose: () => void }) {
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancelar
           </button>
-          <button type="button" className="btn btn-primary" onClick={adicionar}>
+          <button type="button" className="btn btn-primary" onClick={adicionar} disabled={salvando}>
             Adicionar
           </button>
         </>
@@ -335,7 +425,7 @@ function NovaColunaModal({ onClose }: { onClose: () => void }) {
 export default function MissoesView() {
   const searchParams = useSearchParams();
   const secaoParam = searchParams.get('secao') || '';
-  const { data, moveColuna, removeColuna, moveMissao } = useData();
+  const { dados, usuario, moveColuna, removeColuna, moveMissao } = useData();
   const { toast, confirm } = useUI();
   const [filtroSecao, setFiltroSecao] = useState(secaoParam);
   const [filtroPrioridade, setFiltroPrioridade] = useState('');
@@ -365,10 +455,14 @@ export default function MissoesView() {
   }, [menuAberto]);
 
   const termo = busca.trim().toLowerCase();
-  const ultimaColuna = lastColumnId(data);
+  const ultimaColuna = lastColumnId(dados);
+  const gerenciaColunas = podeGerenciarColunas(usuario);
+  const podeCriarMissao =
+    dados.secoes.some((secao) => podeCriarItem(usuario, { divisaoId: secao.divisaoId, secaoId: secao.id })) ||
+    dados.divisoes.some((divisao) => podeCriarItem(usuario, { divisaoId: divisao.id, secaoId: '' }));
 
   const missoesDaColuna = (colunaId: string) => {
-    return data.missoes
+    return dados.missoes
       .filter((missao) => {
         if (missao.colunaId !== colunaId) return false;
         if (filtroSecao && missao.secaoId !== filtroSecao) return false;
@@ -384,7 +478,7 @@ export default function MissoesView() {
 
   const abrirMissao = (id: string) => {
     if (Date.now() - ultimoDrag.current <= 200) return;
-    const missao = data.missoes.find((item) => item.id === id);
+    const missao = dados.missoes.find((item) => item.id === id);
     if (missao) setFormulario({ missao });
   };
 
@@ -421,11 +515,11 @@ export default function MissoesView() {
     const body = event.currentTarget;
     const fallback = body.querySelectorAll('.mission-card').length;
     const indice = dropTarget && dropTarget.colunaId === colunaId ? dropTarget.index : fallback;
-    moveMissao(id, colunaId, indice);
     dragIdRef.current = null;
     setDragId(null);
     setDropTarget(null);
     ultimoDrag.current = Date.now();
+    moveMissao(id, colunaId, indice).catch((erro) => toast(mensagemErro(erro), 'error'));
   };
 
   const onDragEnd = () => {
@@ -449,7 +543,7 @@ export default function MissoesView() {
   };
 
   const excluirColuna = async (coluna: Coluna) => {
-    const total = data.missoes.filter((missao) => missao.colunaId === coluna.id).length;
+    const total = dados.missoes.filter((missao) => missao.colunaId === coluna.id).length;
     if (total > 0) {
       toast('Mova as ' + total + ' missão(ões) desta coluna antes de excluí-la.', 'error');
       return;
@@ -461,23 +555,28 @@ export default function MissoesView() {
       danger: true
     });
     if (!ok) return;
-    removeColuna(coluna.id);
-    toast('Coluna excluída.');
+    try {
+      await removeColuna(coluna.id);
+      toast('Coluna excluída.');
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    }
   };
 
   const renderCard = (missao: Missao) => {
-    const secao = data.secoes.find((item) => item.id === missao.secaoId);
+    const secao = dados.secoes.find((item) => item.id === missao.secaoId);
     const atrasada = Boolean(missao.prazo) && missao.prazo < todayISO() && missao.colunaId !== ultimaColuna;
     const cor = secao ? safeColor(secao.cor) : '';
+    const editavel = podeEditarItem(usuario, missao);
     return (
       <article
         className={'mission-card' + (dragId === missao.id ? ' dragging' : '')}
-        draggable
+        draggable={editavel}
         tabIndex={0}
         role="button"
         data-id={missao.id}
         key={missao.id}
-        aria-label={'Editar missão ' + missao.titulo}
+        aria-label={(editavel ? 'Editar missão ' : 'Ver missão ') + missao.titulo}
         onClick={() => abrirMissao(missao.id)}
         onKeyDown={(event) => onCardKeyDown(event, missao.id)}
         onDragStart={(event) => onDragStart(event, missao)}
@@ -522,68 +621,72 @@ export default function MissoesView() {
           <span className="dot" style={{ background: safeColor(coluna.cor) }} />
           <h3>{coluna.nome}</h3>
           <span className="count">{missoes.length}</span>
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={() => setMenuAberto((atual) => (atual === coluna.id ? null : coluna.id))}
-            aria-label={'Ações da coluna ' + coluna.nome}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="5" cy="12" r="1.4" />
-              <circle cx="12" cy="12" r="1.4" />
-              <circle cx="19" cy="12" r="1.4" />
-            </svg>
-          </button>
-          <div className={'menu' + (menuAberto === coluna.id ? ' open' : '')} role="menu">
-            <button
-              type="button"
-              onClick={() => {
-                setMenuAberto(null);
-                setColunaForm({ modo: 'renomear', coluna });
-              }}
-            >
-              Renomear
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMenuAberto(null);
-                setColunaForm({ modo: 'cor', coluna });
-              }}
-            >
-              Mudar cor
-            </button>
-            <button
-              type="button"
-              disabled={indice === 0}
-              onClick={() => {
-                setMenuAberto(null);
-                moveColuna(coluna.id, -1);
-              }}
-            >
-              Mover para a esquerda
-            </button>
-            <button
-              type="button"
-              disabled={indice === data.colunas.length - 1}
-              onClick={() => {
-                setMenuAberto(null);
-                moveColuna(coluna.id, 1);
-              }}
-            >
-              Mover para a direita
-            </button>
-            <button
-              type="button"
-              className="danger"
-              onClick={() => {
-                setMenuAberto(null);
-                excluirColuna(coluna);
-              }}
-            >
-              Excluir coluna
-            </button>
-          </div>
+          {gerenciaColunas ? (
+            <>
+              <button
+                className="icon-btn"
+                type="button"
+                onClick={() => setMenuAberto((atual) => (atual === coluna.id ? null : coluna.id))}
+                aria-label={'Ações da coluna ' + coluna.nome}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="5" cy="12" r="1.4" />
+                  <circle cx="12" cy="12" r="1.4" />
+                  <circle cx="19" cy="12" r="1.4" />
+                </svg>
+              </button>
+              <div className={'menu' + (menuAberto === coluna.id ? ' open' : '')} role="menu">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuAberto(null);
+                    setColunaForm({ modo: 'renomear', coluna });
+                  }}
+                >
+                  Renomear
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuAberto(null);
+                    setColunaForm({ modo: 'cor', coluna });
+                  }}
+                >
+                  Mudar cor
+                </button>
+                <button
+                  type="button"
+                  disabled={indice === 0}
+                  onClick={() => {
+                    setMenuAberto(null);
+                    moveColuna(coluna.id, -1).catch((erro) => toast(mensagemErro(erro), 'error'));
+                  }}
+                >
+                  Mover para a esquerda
+                </button>
+                <button
+                  type="button"
+                  disabled={indice === dados.colunas.length - 1}
+                  onClick={() => {
+                    setMenuAberto(null);
+                    moveColuna(coluna.id, 1).catch((erro) => toast(mensagemErro(erro), 'error'));
+                  }}
+                >
+                  Mover para a direita
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => {
+                    setMenuAberto(null);
+                    excluirColuna(coluna);
+                  }}
+                >
+                  Excluir coluna
+                </button>
+              </div>
+            </>
+          ) : null}
         </header>
         <div
           className={'column-body' + (dropTarget && dropTarget.colunaId === coluna.id ? ' drop-target' : '')}
@@ -594,13 +697,15 @@ export default function MissoesView() {
         >
           {conteudo}
         </div>
-        <button
-          className="btn btn-ghost btn-sm btn-block"
-          type="button"
-          onClick={() => setFormulario({ missao: null, colunaId: coluna.id })}
-        >
-          + Nova missão
-        </button>
+        {podeCriarMissao ? (
+          <button
+            className="btn btn-ghost btn-sm btn-block"
+            type="button"
+            onClick={() => setFormulario({ missao: null, colunaId: coluna.id })}
+          >
+            + Nova missão
+          </button>
+        ) : null}
       </section>
     );
   };
@@ -613,9 +718,11 @@ export default function MissoesView() {
           <p>Arraste os cartões entre as colunas para atualizar o andamento.</p>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" type="button" onClick={() => setFormulario({ missao: null })}>
-            + Nova missão
-          </button>
+          {podeCriarMissao ? (
+            <button className="btn btn-primary" type="button" onClick={() => setFormulario({ missao: null })}>
+              + Nova missão
+            </button>
+          ) : null}
         </div>
       </div>
       <div className="toolbar">
@@ -628,7 +735,7 @@ export default function MissoesView() {
             onChange={(event) => setFiltroSecao(event.target.value)}
           >
             <option value="">Todas as seções</option>
-            {data.secoes.map((secao) => (
+            {dados.secoes.map((secao) => (
               <option value={secao.id} key={secao.id}>
                 {secao.nome}
               </option>
@@ -664,10 +771,12 @@ export default function MissoesView() {
         </div>
       </div>
       <div className="kanban" id="kanban">
-        {data.colunas.map((coluna, indice) => renderColuna(coluna, indice))}
-        <button className="btn btn-ghost column-add" type="button" onClick={() => setNovaColuna(true)}>
-          + Adicionar coluna
-        </button>
+        {dados.colunas.map((coluna, indice) => renderColuna(coluna, indice))}
+        {gerenciaColunas ? (
+          <button className="btn btn-ghost column-add" type="button" onClick={() => setNovaColuna(true)}>
+            + Adicionar coluna
+          </button>
+        ) : null}
       </div>
       {formulario ? (
         <MissaoFormModal

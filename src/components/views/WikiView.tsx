@@ -4,9 +4,10 @@ import { useState } from 'react';
 import { useData } from '@/components/DataProvider';
 import { Modal, useUI } from '@/components/UIProvider';
 import { renderMarkdown } from '@/lib/markdown';
+import { podeCriarItem, podeEditarItem, podeExcluirItem } from '@/lib/permissoes';
 import { secaoNome } from '@/lib/store';
 import type { WikiPage } from '@/lib/types';
-import { formatDate, safeColor } from '@/lib/utils';
+import { formatDate, mensagemErro, safeColor } from '@/lib/utils';
 
 function WikiFormModal({
   pagina,
@@ -15,30 +16,56 @@ function WikiFormModal({
   pagina?: WikiPage | null;
   onClose: (id?: string) => void;
 }) {
-  const { data, addWiki, updateWiki } = useData();
+  const { dados, usuario, addWiki, updateWiki } = useData();
   const { toast } = useUI();
   const edicao = Boolean(pagina);
-  const [titulo, setTitulo] = useState(pagina ? pagina.titulo : '');
-  const [secaoId, setSecaoId] = useState(pagina ? pagina.secaoId : '');
-  const [conteudo, setConteudo] = useState(pagina ? pagina.conteudo : '');
 
-  const salvar = () => {
+  const opcoesSecao = dados.secoes.filter((item) =>
+    podeCriarItem(usuario, { divisaoId: item.divisaoId, secaoId: item.id })
+  );
+  const secaoAtual =
+    pagina && pagina.secaoId && !opcoesSecao.some((item) => item.id === pagina.secaoId)
+      ? dados.secoes.find((item) => item.id === pagina.secaoId)
+      : undefined;
+  const secoes = secaoAtual ? [secaoAtual, ...opcoesSecao] : opcoesSecao;
+  const divisoesSemSecao = dados.divisoes.filter((item) =>
+    podeCriarItem(usuario, { divisaoId: item.id, secaoId: '' })
+  );
+  const permiteSemSecao = divisoesSemSecao.length > 0;
+
+  const [titulo, setTitulo] = useState(pagina ? pagina.titulo : '');
+  const [secaoId, setSecaoId] = useState(
+    pagina ? pagina.secaoId : permiteSemSecao ? '' : secoes[0] ? secoes[0].id : ''
+  );
+  const [divisaoId, setDivisaoId] = useState(
+    pagina ? pagina.divisaoId : usuario.divisaoId || (divisoesSemSecao[0] ? divisoesSemSecao[0].id : '')
+  );
+  const [conteudo, setConteudo] = useState(pagina ? pagina.conteudo : '');
+  const [salvando, setSalvando] = useState(false);
+
+  const salvar = async () => {
     const valorTitulo = titulo.trim();
     if (!valorTitulo) {
       toast('Informe o título da página.', 'error');
       return;
     }
-    const dados = { titulo: valorTitulo, secaoId, conteudo };
-    let salva: WikiPage | null;
-    if (pagina) {
-      updateWiki(pagina.id, dados);
-      salva = { ...pagina, ...dados };
-      toast('Página atualizada.');
-    } else {
-      salva = addWiki(dados);
-      toast('Página criada.');
+    setSalvando(true);
+    try {
+      const dadosPagina = { titulo: valorTitulo, secaoId, divisaoId: secaoId ? undefined : divisaoId, conteudo };
+      if (pagina) {
+        await updateWiki(pagina.id, dadosPagina);
+        toast('Página atualizada.');
+        onClose(pagina.id);
+      } else {
+        const id = await addWiki(dadosPagina);
+        toast('Página criada.');
+        onClose(id);
+      }
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvando(false);
     }
-    onClose(salva ? salva.id : '');
   };
 
   return (
@@ -51,7 +78,7 @@ function WikiFormModal({
           <button type="button" className="btn btn-ghost" onClick={() => onClose()}>
             Cancelar
           </button>
-          <button type="button" className="btn btn-primary" onClick={salvar}>
+          <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}>
             Salvar
           </button>
         </>
@@ -70,7 +97,7 @@ function WikiFormModal({
             placeholder="Ex.: Como reiniciar o servidor de arquivos"
           />
         </div>
-        <div className="field span-2">
+        <div className="field">
           <label htmlFor="wiki-secao">Seção</label>
           <select
             className="select"
@@ -78,14 +105,31 @@ function WikiFormModal({
             value={secaoId}
             onChange={(event) => setSecaoId(event.target.value)}
           >
-            <option value="">Sem seção</option>
-            {data.secoes.map((secao) => (
+            {permiteSemSecao ? <option value="">Sem seção</option> : null}
+            {secoes.map((secao) => (
               <option value={secao.id} key={secao.id}>
                 {secao.nome}
               </option>
             ))}
           </select>
         </div>
+        {permiteSemSecao && !secaoId ? (
+          <div className="field">
+            <label htmlFor="wiki-divisao">Divisão</label>
+            <select
+              className="select"
+              id="wiki-divisao"
+              value={divisaoId}
+              onChange={(event) => setDivisaoId(event.target.value)}
+            >
+              {divisoesSemSecao.map((divisao) => (
+                <option value={divisao.id} key={divisao.id}>
+                  {divisao.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <div className="field span-2">
           <label htmlFor="wiki-conteudo">Conteúdo</label>
           <textarea
@@ -102,17 +146,20 @@ function WikiFormModal({
 }
 
 export default function WikiView() {
-  const { data, removeWiki } = useData();
+  const { dados, usuario, removeWiki } = useData();
   const { toast, confirm } = useUI();
   const [selecionada, setSelecionada] = useState('');
   const [busca, setBusca] = useState('');
   const [filtroSecao, setFiltroSecao] = useState('');
   const [formulario, setFormulario] = useState<{ pagina: WikiPage | null } | null>(null);
 
-  const paginas = data.wiki;
+  const paginas = dados.wiki;
   const atual = paginas.find((item) => item.id === selecionada) || paginas[0] || null;
   const ativaId = atual ? atual.id : '';
   const termo = busca.trim().toLowerCase();
+  const podeCriar =
+    dados.secoes.some((secao) => podeCriarItem(usuario, { divisaoId: secao.divisaoId, secaoId: secao.id })) ||
+    dados.divisoes.some((divisao) => podeCriarItem(usuario, { divisaoId: divisao.id, secaoId: '' }));
 
   const lista = paginas.filter((pagina) => {
     if (filtroSecao && pagina.secaoId !== filtroSecao) return false;
@@ -128,12 +175,18 @@ export default function WikiView() {
       danger: true
     });
     if (!ok) return;
-    removeWiki(pagina.id);
-    if (selecionada === pagina.id) setSelecionada('');
-    toast('Página excluída.');
+    try {
+      await removeWiki(pagina.id);
+      if (selecionada === pagina.id) setSelecionada('');
+      toast('Página excluída.');
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    }
   };
 
-  const secao = atual ? data.secoes.find((item) => item.id === atual.secaoId) : undefined;
+  const secao = atual ? dados.secoes.find((item) => item.id === atual.secaoId) : undefined;
+  const editavel = atual ? podeEditarItem(usuario, atual) : false;
+  const excluivel = atual ? podeExcluirItem(usuario, atual) : false;
 
   return (
     <>
@@ -143,9 +196,11 @@ export default function WikiView() {
           <p>Documentação interna com títulos, listas, negrito e blocos de código.</p>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" type="button" onClick={() => setFormulario({ pagina: null })}>
-            Nova página
-          </button>
+          {podeCriar ? (
+            <button className="btn btn-primary" type="button" onClick={() => setFormulario({ pagina: null })}>
+              Nova página
+            </button>
+          ) : null}
         </div>
       </div>
       <div className="wiki-layout">
@@ -174,7 +229,7 @@ export default function WikiView() {
               onChange={(event) => setFiltroSecao(event.target.value)}
             >
               <option value="">Todas as seções</option>
-              {data.secoes.map((item) => (
+              {dados.secoes.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.nome}
                 </option>
@@ -192,7 +247,7 @@ export default function WikiView() {
                   onClick={() => setSelecionada(pagina.id)}
                 >
                   <strong>{pagina.titulo}</strong>
-                  <small>{secaoNome(data, pagina.secaoId) || 'Sem seção'}</small>
+                  <small>{secaoNome(dados, pagina.secaoId) || 'Sem seção'}</small>
                 </button>
               ))
             ) : (
@@ -221,20 +276,24 @@ export default function WikiView() {
                   </div>
                 </div>
                 <div className="page-actions">
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    onClick={() => setFormulario({ pagina: atual })}
-                  >
-                    Editar
-                  </button>
-                  <button
-                    className="btn btn-sm btn-ghost btn-icon-danger"
-                    type="button"
-                    onClick={() => excluir(atual)}
-                  >
-                    Excluir
-                  </button>
+                  {editavel ? (
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      onClick={() => setFormulario({ pagina: atual })}
+                    >
+                      Editar
+                    </button>
+                  ) : null}
+                  {excluivel ? (
+                    <button
+                      className="btn btn-sm btn-ghost btn-icon-danger"
+                      type="button"
+                      onClick={() => excluir(atual)}
+                    >
+                      Excluir
+                    </button>
+                  ) : null}
                 </div>
               </div>
               <div

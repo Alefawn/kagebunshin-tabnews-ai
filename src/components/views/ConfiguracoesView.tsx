@@ -1,9 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
 import { useData } from '@/components/DataProvider';
 import { useUI } from '@/components/UIProvider';
-import { STORAGE_KEY, validateImport } from '@/lib/store';
+import { PAPEIS } from '@/lib/store';
 import type { Tema } from '@/lib/types';
 
 const VERSAO = '1.0.0';
@@ -15,13 +14,11 @@ const TEMAS: { valor: Tema; rotulo: string }[] = [
 ];
 
 export default function ConfiguracoesView() {
-  const { data, setTheme, resetSeed, clearAll, importData } = useData();
-  const { toast, confirm } = useUI();
-  const arquivoRef = useRef<HTMLInputElement>(null);
-  const [arquivo, setArquivo] = useState('');
+  const { dados, usuario, tema, setTema } = useData();
+  const { toast } = useUI();
 
   const exportar = () => {
-    const conteudo = JSON.stringify(data, null, 2);
+    const conteudo = JSON.stringify(dados, null, 2);
     try {
       const blob = new Blob([conteudo], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -38,66 +35,12 @@ export default function ConfiguracoesView() {
     }
   };
 
-  const importar = (file: File) => {
-    const leitor = new FileReader();
-    leitor.onload = async () => {
-      let dados: unknown;
-      try {
-        dados = JSON.parse(String(leitor.result));
-      } catch {
-        toast('Arquivo JSON inválido.', 'error');
-        return;
-      }
-      if (!validateImport(dados)) {
-        toast('O arquivo não contém as listas esperadas.', 'error');
-        return;
-      }
-      const ok = await confirm({
-        title: 'Importar dados',
-        message: 'Substituir os dados atuais pelos do arquivo? Esta ação não pode ser desfeita.',
-        confirmLabel: 'Importar',
-        danger: true
-      });
-      if (!ok) return;
-      importData(dados);
-      toast('Dados importados.');
-    };
-    leitor.onerror = () => {
-      toast('Falha ao ler o arquivo.', 'error');
-    };
-    leitor.readAsText(file);
-  };
-
-  const restaurar = async () => {
-    const ok = await confirm({
-      title: 'Restaurar dados de exemplo',
-      message: 'Substituir todos os dados atuais pelo conteúdo de exemplo?',
-      confirmLabel: 'Restaurar',
-      danger: true
-    });
-    if (!ok) return;
-    resetSeed();
-    toast('Dados de exemplo restaurados.');
-  };
-
-  const limpar = async () => {
-    const ok = await confirm({
-      title: 'Limpar tudo',
-      message: 'Remover todas as seções, missões, páginas da wiki e scripts? O perfil e o tema são mantidos.',
-      confirmLabel: 'Limpar',
-      danger: true
-    });
-    if (!ok) return;
-    clearAll();
-    toast('Dados removidos.');
-  };
-
   return (
     <>
       <div className="page-head">
         <div>
           <h2>Configurações</h2>
-          <p>Preferências de aparência e gestão dos dados locais.</p>
+          <p>Preferências de aparência e exportação dos dados visíveis.</p>
         </div>
       </div>
       <div className="settings-grid">
@@ -109,10 +52,10 @@ export default function ConfiguracoesView() {
               <button
                 type="button"
                 data-tema={item.valor}
-                className={data.theme === item.valor ? 'active' : ''}
+                className={tema === item.valor ? 'active' : ''}
                 key={item.valor}
                 onClick={() => {
-                  setTheme(item.valor);
+                  setTema(item.valor);
                   toast('Tema atualizado.');
                 }}
               >
@@ -123,34 +66,10 @@ export default function ConfiguracoesView() {
         </div>
         <div className="card settings-card">
           <h3>Dados</h3>
-          <p>Exporte um backup em JSON, importe um arquivo existente ou recomece do zero.</p>
+          <p>Baixe um JSON com as divisões, seções, missões, páginas e scripts que você enxerga.</p>
           <div className="settings-row">
             <button className="btn" type="button" onClick={exportar}>
-              Exportar dados
-            </button>
-            <button className="btn" type="button" onClick={() => arquivoRef.current?.click()}>
-              Importar dados
-            </button>
-            <input
-              className="visually-hidden"
-              id="import-file"
-              type="file"
-              accept="application/json,.json"
-              ref={arquivoRef}
-              value={arquivo}
-              onChange={(event) => {
-                const file = event.target.files && event.target.files[0];
-                if (file) importar(file);
-                setArquivo('');
-              }}
-            />
-          </div>
-          <div className="settings-row">
-            <button className="btn" type="button" onClick={restaurar}>
-              Restaurar dados de exemplo
-            </button>
-            <button className="btn btn-ghost btn-icon-danger" type="button" onClick={limpar}>
-              Limpar tudo
+              Exportar dados visíveis (JSON)
             </button>
           </div>
         </div>
@@ -161,25 +80,33 @@ export default function ConfiguracoesView() {
             <strong>{VERSAO}</strong>
           </div>
           <div className="kv">
-            <span>Armazenamento</span>
-            <strong>{STORAGE_KEY}</strong>
+            <span>Seu papel</span>
+            <strong>{PAPEIS[usuario.papel]}</strong>
           </div>
-          <div className="kv">
-            <span>Seções</span>
-            <strong>{data.secoes.length}</strong>
-          </div>
-          <div className="kv">
-            <span>Missões</span>
-            <strong>{data.missoes.length}</strong>
-          </div>
-          <div className="kv">
-            <span>Páginas na wiki</span>
-            <strong>{data.wiki.length}</strong>
-          </div>
-          <div className="kv">
-            <span>Scripts</span>
-            <strong>{data.scripts.length}</strong>
-          </div>
+          {usuario.papel === 'admin' ? (
+            <>
+              <div className="kv">
+                <span>Divisões</span>
+                <strong>{dados.divisoes.length}</strong>
+              </div>
+              <div className="kv">
+                <span>Seções</span>
+                <strong>{dados.secoes.length}</strong>
+              </div>
+              <div className="kv">
+                <span>Missões</span>
+                <strong>{dados.missoes.length}</strong>
+              </div>
+              <div className="kv">
+                <span>Páginas na wiki</span>
+                <strong>{dados.wiki.length}</strong>
+              </div>
+              <div className="kv">
+                <span>Scripts</span>
+                <strong>{dados.scripts.length}</strong>
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
     </>

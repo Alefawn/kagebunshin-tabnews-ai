@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import {
   createContext,
   useCallback,
@@ -9,37 +10,126 @@ import {
   useState,
   type ReactNode
 } from 'react';
-import type { AppData, Coluna, Missao, Profile, Script, Secao, SecaoCounts, Tema, WikiPage } from '@/lib/types';
-import * as store from '@/lib/store';
+import { reordenarMissao } from '@/lib/store';
+import type {
+  DadosPainel,
+  Papel,
+  Prioridade,
+  SecaoCounts,
+  Tema,
+  Usuario,
+  UsuarioSessao
+} from '@/lib/types';
+
+export const CHAVE_TEMA = 'kagebunshin:tema';
+
+export interface DivisaoInput {
+  nome: string;
+  descricao?: string;
+  cor?: string;
+}
+
+export interface SecaoInput {
+  divisaoId: string;
+  nome: string;
+  descricao?: string;
+  responsavel?: string;
+  cor?: string;
+}
+
+export interface MissaoInput {
+  titulo: string;
+  descricao?: string;
+  secaoId?: string;
+  divisaoId?: string;
+  colunaId: string;
+  prioridade?: Prioridade;
+  responsavel?: string;
+  prazo?: string;
+}
+
+export interface WikiInput {
+  titulo: string;
+  conteudo?: string;
+  secaoId?: string;
+  divisaoId?: string;
+}
+
+export interface ScriptInput {
+  nome: string;
+  linguagem?: string;
+  descricao?: string;
+  codigo?: string;
+  secaoId?: string;
+  divisaoId?: string;
+}
+
+export interface PerfilInput {
+  nome: string;
+  cargo?: string;
+  telefone?: string;
+  bio?: string;
+}
+
+export interface UsuarioInput {
+  nome: string;
+  email: string;
+  senha?: string;
+  papel: Papel;
+  divisaoId?: string;
+  secaoId?: string;
+  cargo?: string;
+  ativo?: boolean;
+}
 
 interface DataContextValue {
-  data: AppData;
-  hydrated: boolean;
-  addSecao: (input: store.SecaoInput) => Secao | null;
-  updateSecao: (id: string, patch: Partial<store.SecaoInput>) => void;
-  removeSecao: (id: string) => SecaoCounts;
-  addColuna: (nome: string, cor: string) => Coluna | null;
-  updateColuna: (id: string, patch: { nome?: string; cor?: string }) => void;
-  moveColuna: (id: string, direction: number) => void;
-  removeColuna: (id: string) => { ok: boolean; total: number };
-  addMissao: (input: store.MissaoInput) => Missao | null;
-  updateMissao: (id: string, patch: Partial<store.MissaoInput>) => void;
-  removeMissao: (id: string) => void;
-  moveMissao: (id: string, colunaId: string, index: number) => void;
-  addWiki: (input: store.WikiInput) => WikiPage | null;
-  updateWiki: (id: string, patch: Partial<store.WikiInput>) => void;
-  removeWiki: (id: string) => void;
-  addScript: (input: store.ScriptInput) => Script | null;
-  updateScript: (id: string, patch: Partial<store.ScriptInput>) => void;
-  removeScript: (id: string) => void;
-  updateProfile: (patch: Partial<Profile>) => void;
-  setTheme: (theme: Tema) => void;
-  resetSeed: () => void;
-  clearAll: () => void;
-  importData: (raw: unknown) => void;
+  dados: DadosPainel;
+  usuario: UsuarioSessao;
+  tema: Tema;
+  setTema: (tema: Tema) => void;
+  recarregar: () => Promise<void>;
+  addDivisao: (input: DivisaoInput) => Promise<string>;
+  updateDivisao: (id: string, patch: Partial<DivisaoInput>) => Promise<void>;
+  removeDivisao: (id: string) => Promise<void>;
+  addSecao: (input: SecaoInput) => Promise<string>;
+  updateSecao: (id: string, patch: Partial<Omit<SecaoInput, 'divisaoId'>>) => Promise<void>;
+  removeSecao: (id: string) => Promise<SecaoCounts>;
+  addColuna: (nome: string, cor: string) => Promise<string>;
+  updateColuna: (id: string, patch: { nome?: string; cor?: string }) => Promise<void>;
+  moveColuna: (id: string, direcao: number) => Promise<void>;
+  removeColuna: (id: string) => Promise<void>;
+  addMissao: (input: MissaoInput) => Promise<string>;
+  updateMissao: (id: string, patch: Partial<MissaoInput>) => Promise<void>;
+  removeMissao: (id: string) => Promise<void>;
+  moveMissao: (id: string, colunaId: string, index: number) => Promise<void>;
+  addWiki: (input: WikiInput) => Promise<string>;
+  updateWiki: (id: string, patch: Partial<WikiInput>) => Promise<void>;
+  removeWiki: (id: string) => Promise<void>;
+  addScript: (input: ScriptInput) => Promise<string>;
+  updateScript: (id: string, patch: Partial<ScriptInput>) => Promise<void>;
+  removeScript: (id: string) => Promise<void>;
+  updatePerfil: (patch: PerfilInput) => Promise<void>;
+  alterarSenha: (senhaAtual: string, novaSenha: string) => Promise<void>;
+  listarUsuarios: () => Promise<Usuario[]>;
+  criarUsuario: (input: UsuarioInput) => Promise<string>;
+  atualizarUsuario: (id: string, patch: Partial<UsuarioInput>) => Promise<void>;
+  removerUsuario: (id: string) => Promise<void>;
+  sair: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
+
+async function api<T>(metodo: string, url: string, corpo?: unknown): Promise<T> {
+  const resposta = await fetch(url, {
+    method: metodo,
+    headers: corpo === undefined ? undefined : { 'content-type': 'application/json' },
+    body: corpo === undefined ? undefined : JSON.stringify(corpo),
+    cache: 'no-store'
+  });
+  const dados = (await resposta.json().catch(() => null)) as { erro?: string } | null;
+  if (!resposta.ok) throw new Error((dados && dados.erro) || 'Não foi possível concluir a operação.');
+  return dados as T;
+}
 
 function resolverTema(preferencia: Tema): 'light' | 'dark' {
   if (preferencia === 'light' || preferencia === 'dark') return preferencia;
@@ -49,22 +139,38 @@ function resolverTema(preferencia: Tema): 'light' | 'dark' {
   return 'light';
 }
 
-export function DataProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<AppData | null>(null);
+export function DataProvider({ usuarioInicial, children }: { usuarioInicial: UsuarioSessao; children: ReactNode }) {
+  const router = useRouter();
+  const [dados, setDados] = useState<DadosPainel | null>(null);
+  const [usuario, setUsuario] = useState<UsuarioSessao>(usuarioInicial);
+  const [tema, setTemaState] = useState<Tema>('system');
+  const [falha, setFalha] = useState('');
+
+  const recarregar = useCallback(async () => {
+    const resposta = await fetch('/api/dados', { cache: 'no-store' });
+    if (resposta.status === 401) {
+      router.replace('/login');
+      return;
+    }
+    const corpo = (await resposta.json().catch(() => null)) as DadosPainel | null;
+    if (!resposta.ok || !corpo) throw new Error('Não foi possível carregar os dados do painel.');
+    setDados(corpo);
+    setUsuario(corpo.usuario);
+    setFalha('');
+  }, [router]);
 
   useEffect(() => {
-    setData(store.load());
+    recarregar().catch(() => setFalha('Não foi possível carregar os dados do painel.'));
+  }, [recarregar]);
+
+  useEffect(() => {
+    try {
+      const salvo = window.localStorage.getItem(CHAVE_TEMA);
+      if (salvo === 'light' || salvo === 'dark' || salvo === 'system') setTemaState(salvo);
+    } catch {}
   }, []);
 
   useEffect(() => {
-    if (!data) return;
-    store.persist(data);
-  }, [data]);
-
-  const tema = data ? data.theme : null;
-
-  useEffect(() => {
-    if (!tema) return;
     const aplicar = () => {
       document.documentElement.setAttribute('data-theme', resolverTema(tema));
     };
@@ -81,190 +187,236 @@ export function DataProvider({ children }: { children: ReactNode }) {
     };
   }, [tema]);
 
-  const addSecao = useCallback(
-    (input: store.SecaoInput) => {
-      if (!data) return null;
-      const resultado = store.addSecao(data, input);
-      setData(resultado.data);
-      return resultado.item;
+  const setTema = useCallback((valor: Tema) => {
+    setTemaState(valor);
+    try {
+      window.localStorage.setItem(CHAVE_TEMA, valor);
+    } catch {}
+  }, []);
+
+  const addDivisao = useCallback(
+    async (input: DivisaoInput) => {
+      const criada = await api<{ id: string }>('POST', '/api/divisoes', input);
+      await recarregar();
+      return criada.id;
     },
-    [data]
+    [recarregar]
+  );
+
+  const updateDivisao = useCallback(
+    async (id: string, patch: Partial<DivisaoInput>) => {
+      await api('PATCH', '/api/divisoes/' + id, patch);
+      await recarregar();
+    },
+    [recarregar]
+  );
+
+  const removeDivisao = useCallback(
+    async (id: string) => {
+      await api('DELETE', '/api/divisoes/' + id);
+      await recarregar();
+    },
+    [recarregar]
+  );
+
+  const addSecao = useCallback(
+    async (input: SecaoInput) => {
+      const criada = await api<{ id: string }>('POST', '/api/secoes', input);
+      await recarregar();
+      return criada.id;
+    },
+    [recarregar]
   );
 
   const updateSecao = useCallback(
-    (id: string, patch: Partial<store.SecaoInput>) => {
-      if (!data) return;
-      setData(store.updateSecao(data, id, patch));
+    async (id: string, patch: Partial<Omit<SecaoInput, 'divisaoId'>>) => {
+      await api('PATCH', '/api/secoes/' + id, patch);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const removeSecao = useCallback(
-    (id: string) => {
-      if (!data) return { missoes: 0, wiki: 0, scripts: 0 };
-      const counts = store.countsSecao(data, id);
-      setData(store.removeSecao(data, id));
-      return counts;
+    async (id: string) => {
+      const resultado = await api<{ missoes: number; wiki: number; scripts: number }>(
+        'DELETE',
+        '/api/secoes/' + id
+      );
+      await recarregar();
+      return { missoes: resultado.missoes, wiki: resultado.wiki, scripts: resultado.scripts };
     },
-    [data]
+    [recarregar]
   );
 
   const addColuna = useCallback(
-    (nome: string, cor: string) => {
-      if (!data) return null;
-      const resultado = store.addColuna(data, nome, cor);
-      setData(resultado.data);
-      return resultado.item;
+    async (nome: string, cor: string) => {
+      const criada = await api<{ id: string }>('POST', '/api/colunas', { nome, cor });
+      await recarregar();
+      return criada.id;
     },
-    [data]
+    [recarregar]
   );
 
   const updateColuna = useCallback(
-    (id: string, patch: { nome?: string; cor?: string }) => {
-      if (!data) return;
-      setData(store.updateColuna(data, id, patch));
+    async (id: string, patch: { nome?: string; cor?: string }) => {
+      await api('PATCH', '/api/colunas/' + id, patch);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const moveColuna = useCallback(
-    (id: string, direction: number) => {
-      if (!data) return;
-      setData(store.moveColuna(data, id, direction));
+    async (id: string, direcao: number) => {
+      await api('PATCH', '/api/colunas/' + id, { direcao });
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const removeColuna = useCallback(
-    (id: string) => {
-      if (!data) return { ok: false, total: 0 };
-      const resultado = store.removeColuna(data, id);
-      if (resultado.ok) setData(resultado.data);
-      return { ok: resultado.ok, total: resultado.total };
+    async (id: string) => {
+      await api('DELETE', '/api/colunas/' + id);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const addMissao = useCallback(
-    (input: store.MissaoInput) => {
-      if (!data) return null;
-      const resultado = store.addMissao(data, input);
-      setData(resultado.data);
-      return resultado.item;
+    async (input: MissaoInput) => {
+      const criada = await api<{ id: string }>('POST', '/api/missoes', input);
+      await recarregar();
+      return criada.id;
     },
-    [data]
+    [recarregar]
   );
 
   const updateMissao = useCallback(
-    (id: string, patch: Partial<store.MissaoInput>) => {
-      if (!data) return;
-      setData(store.updateMissao(data, id, patch));
+    async (id: string, patch: Partial<MissaoInput>) => {
+      await api('PATCH', '/api/missoes/' + id, patch);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const removeMissao = useCallback(
-    (id: string) => {
-      if (!data) return;
-      setData(store.removeMissao(data, id));
+    async (id: string) => {
+      await api('DELETE', '/api/missoes/' + id);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const moveMissao = useCallback(
-    (id: string, colunaId: string, index: number) => {
-      if (!data) return;
-      setData(store.moveMissao(data, id, colunaId, index));
+    async (id: string, colunaId: string, index: number) => {
+      setDados((atual) => (atual ? reordenarMissao(atual, id, colunaId, index) : atual));
+      try {
+        await api('PATCH', '/api/missoes/' + id, { colunaId, index });
+      } catch (erro) {
+        await recarregar().catch(() => undefined);
+        throw erro;
+      }
     },
-    [data]
+    [recarregar]
   );
 
   const addWiki = useCallback(
-    (input: store.WikiInput) => {
-      if (!data) return null;
-      const resultado = store.addWiki(data, input);
-      setData(resultado.data);
-      return resultado.item;
+    async (input: WikiInput) => {
+      const criada = await api<{ id: string }>('POST', '/api/wiki', input);
+      await recarregar();
+      return criada.id;
     },
-    [data]
+    [recarregar]
   );
 
   const updateWiki = useCallback(
-    (id: string, patch: Partial<store.WikiInput>) => {
-      if (!data) return;
-      setData(store.updateWiki(data, id, patch));
+    async (id: string, patch: Partial<WikiInput>) => {
+      await api('PATCH', '/api/wiki/' + id, patch);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const removeWiki = useCallback(
-    (id: string) => {
-      if (!data) return;
-      setData(store.removeWiki(data, id));
+    async (id: string) => {
+      await api('DELETE', '/api/wiki/' + id);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const addScript = useCallback(
-    (input: store.ScriptInput) => {
-      if (!data) return null;
-      const resultado = store.addScript(data, input);
-      setData(resultado.data);
-      return resultado.item;
+    async (input: ScriptInput) => {
+      const criado = await api<{ id: string }>('POST', '/api/scripts', input);
+      await recarregar();
+      return criado.id;
     },
-    [data]
+    [recarregar]
   );
 
   const updateScript = useCallback(
-    (id: string, patch: Partial<store.ScriptInput>) => {
-      if (!data) return;
-      setData(store.updateScript(data, id, patch));
+    async (id: string, patch: Partial<ScriptInput>) => {
+      await api('PATCH', '/api/scripts/' + id, patch);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
   const removeScript = useCallback(
-    (id: string) => {
-      if (!data) return;
-      setData(store.removeScript(data, id));
+    async (id: string) => {
+      await api('DELETE', '/api/scripts/' + id);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
-  const updateProfile = useCallback(
-    (patch: Partial<Profile>) => {
-      if (!data) return;
-      setData(store.updateProfile(data, patch));
+  const updatePerfil = useCallback(
+    async (patch: PerfilInput) => {
+      await api('PATCH', '/api/perfil', patch);
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
-  const setTheme = useCallback(
-    (theme: Tema) => {
-      if (!data) return;
-      setData(store.setTheme(data, theme));
+  const alterarSenha = useCallback(
+    async (senhaAtual: string, novaSenha: string) => {
+      await api('POST', '/api/perfil/senha', { senhaAtual, novaSenha });
+      await recarregar();
     },
-    [data]
+    [recarregar]
   );
 
-  const resetSeed = useCallback(() => {
-    setData(store.seed());
+  const listarUsuarios = useCallback(async () => {
+    return api<Usuario[]>('GET', '/api/usuarios');
   }, []);
 
-  const clearAll = useCallback(() => {
-    if (!data) return;
-    setData(store.clearAll(data));
-  }, [data]);
+  const criarUsuario = useCallback(async (input: UsuarioInput) => {
+    const criado = await api<{ id: string }>('POST', '/api/usuarios', input);
+    return criado.id;
+  }, []);
 
-  const importData = useCallback((raw: unknown) => {
-    setData(store.importData(raw));
+  const atualizarUsuario = useCallback(async (id: string, patch: Partial<UsuarioInput>) => {
+    await api('PATCH', '/api/usuarios/' + id, patch);
+  }, []);
+
+  const removerUsuario = useCallback(async (id: string) => {
+    await api('DELETE', '/api/usuarios/' + id);
+  }, []);
+
+  const sair = useCallback(async () => {
+    await api('POST', '/api/auth/logout');
   }, []);
 
   const valor = useMemo<DataContextValue | null>(() => {
-    if (!data) return null;
+    if (!dados) return null;
     return {
-      data,
-      hydrated: true,
+      dados,
+      usuario,
+      tema,
+      setTema,
+      recarregar,
+      addDivisao,
+      updateDivisao,
+      removeDivisao,
       addSecao,
       updateSecao,
       removeSecao,
@@ -282,14 +434,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
       addScript,
       updateScript,
       removeScript,
-      updateProfile,
-      setTheme,
-      resetSeed,
-      clearAll,
-      importData
+      updatePerfil,
+      alterarSenha,
+      listarUsuarios,
+      criarUsuario,
+      atualizarUsuario,
+      removerUsuario,
+      sair
     };
   }, [
-    data,
+    dados,
+    usuario,
+    tema,
+    setTema,
+    recarregar,
+    addDivisao,
+    updateDivisao,
+    removeDivisao,
     addSecao,
     updateSecao,
     removeSecao,
@@ -307,15 +468,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addScript,
     updateScript,
     removeScript,
-    updateProfile,
-    setTheme,
-    resetSeed,
-    clearAll,
-    importData
+    updatePerfil,
+    alterarSenha,
+    listarUsuarios,
+    criarUsuario,
+    atualizarUsuario,
+    removerUsuario,
+    sair
   ]);
 
   if (!valor) {
-    return <p className="empty">Carregando…</p>;
+    return <p className="empty">{falha || 'Carregando...'}</p>;
   }
 
   return <DataContext.Provider value={valor}>{children}</DataContext.Provider>;

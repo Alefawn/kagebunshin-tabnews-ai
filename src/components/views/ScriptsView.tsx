@@ -3,41 +3,70 @@
 import { useState } from 'react';
 import { useData } from '@/components/DataProvider';
 import { Modal, useUI } from '@/components/UIProvider';
+import { podeCriarItem, podeEditarItem, podeExcluirItem } from '@/lib/permissoes';
 import { LINGUAGENS } from '@/lib/store';
 import type { Script } from '@/lib/types';
-import { formatDate, safeColor } from '@/lib/utils';
+import { formatDate, mensagemErro, safeColor } from '@/lib/utils';
 
 function ScriptFormModal({ script, onClose }: { script?: Script | null; onClose: () => void }) {
-  const { data, addScript, updateScript } = useData();
+  const { dados, usuario, addScript, updateScript } = useData();
   const { toast } = useUI();
   const edicao = Boolean(script);
+
+  const opcoesSecao = dados.secoes.filter((item) =>
+    podeCriarItem(usuario, { divisaoId: item.divisaoId, secaoId: item.id })
+  );
+  const secaoAtual =
+    script && script.secaoId && !opcoesSecao.some((item) => item.id === script.secaoId)
+      ? dados.secoes.find((item) => item.id === script.secaoId)
+      : undefined;
+  const secoes = secaoAtual ? [secaoAtual, ...opcoesSecao] : opcoesSecao;
+  const divisoesSemSecao = dados.divisoes.filter((item) =>
+    podeCriarItem(usuario, { divisaoId: item.id, secaoId: '' })
+  );
+  const permiteSemSecao = divisoesSemSecao.length > 0;
+
   const [nome, setNome] = useState(script ? script.nome : '');
   const [linguagem, setLinguagem] = useState(script ? script.linguagem : 'Bash');
-  const [secaoId, setSecaoId] = useState(script ? script.secaoId : '');
+  const [secaoId, setSecaoId] = useState(
+    script ? script.secaoId : permiteSemSecao ? '' : secoes[0] ? secoes[0].id : ''
+  );
+  const [divisaoId, setDivisaoId] = useState(
+    script ? script.divisaoId : usuario.divisaoId || (divisoesSemSecao[0] ? divisoesSemSecao[0].id : '')
+  );
   const [descricao, setDescricao] = useState(script ? script.descricao : '');
   const [codigo, setCodigo] = useState(script ? script.codigo : '');
+  const [salvando, setSalvando] = useState(false);
 
-  const salvar = () => {
+  const salvar = async () => {
     const valorNome = nome.trim();
     if (!valorNome) {
       toast('Informe o nome do script.', 'error');
       return;
     }
-    const dados = {
-      nome: valorNome,
-      linguagem,
-      secaoId,
-      descricao: descricao.trim(),
-      codigo
-    };
-    if (script) {
-      updateScript(script.id, dados);
-      toast('Script atualizado.');
-    } else {
-      addScript(dados);
-      toast('Script criado.');
+    setSalvando(true);
+    try {
+      const dadosScript = {
+        nome: valorNome,
+        linguagem,
+        secaoId,
+        divisaoId: secaoId ? undefined : divisaoId,
+        descricao: descricao.trim(),
+        codigo
+      };
+      if (script) {
+        await updateScript(script.id, dadosScript);
+        toast('Script atualizado.');
+      } else {
+        await addScript(dadosScript);
+        toast('Script criado.');
+      }
+      onClose();
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    } finally {
+      setSalvando(false);
     }
-    onClose();
   };
 
   return (
@@ -50,7 +79,7 @@ function ScriptFormModal({ script, onClose }: { script?: Script | null; onClose:
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancelar
           </button>
-          <button type="button" className="btn btn-primary" onClick={salvar}>
+          <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}>
             Salvar
           </button>
         </>
@@ -84,7 +113,7 @@ function ScriptFormModal({ script, onClose }: { script?: Script | null; onClose:
             ))}
           </select>
         </div>
-        <div className="field span-2">
+        <div className="field">
           <label htmlFor="script-secao">Seção</label>
           <select
             className="select"
@@ -92,14 +121,31 @@ function ScriptFormModal({ script, onClose }: { script?: Script | null; onClose:
             value={secaoId}
             onChange={(event) => setSecaoId(event.target.value)}
           >
-            <option value="">Sem seção</option>
-            {data.secoes.map((secao) => (
+            {permiteSemSecao ? <option value="">Sem seção</option> : null}
+            {secoes.map((secao) => (
               <option value={secao.id} key={secao.id}>
                 {secao.nome}
               </option>
             ))}
           </select>
         </div>
+        {permiteSemSecao && !secaoId ? (
+          <div className="field">
+            <label htmlFor="script-divisao">Divisão</label>
+            <select
+              className="select"
+              id="script-divisao"
+              value={divisaoId}
+              onChange={(event) => setDivisaoId(event.target.value)}
+            >
+              {divisoesSemSecao.map((divisao) => (
+                <option value={divisao.id} key={divisao.id}>
+                  {divisao.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <div className="field span-2">
           <label htmlFor="script-descricao">Descrição</label>
           <input
@@ -129,7 +175,7 @@ function ScriptFormModal({ script, onClose }: { script?: Script | null; onClose:
 }
 
 export default function ScriptsView() {
-  const { data, removeScript } = useData();
+  const { dados, usuario, removeScript } = useData();
   const { toast, confirm } = useUI();
   const [busca, setBusca] = useState('');
   const [linguagem, setLinguagem] = useState('');
@@ -137,8 +183,11 @@ export default function ScriptsView() {
   const [formulario, setFormulario] = useState<{ script: Script | null } | null>(null);
 
   const termo = busca.trim().toLowerCase();
+  const podeCriar =
+    dados.secoes.some((secao) => podeCriarItem(usuario, { divisaoId: secao.divisaoId, secaoId: secao.id })) ||
+    dados.divisoes.some((divisao) => podeCriarItem(usuario, { divisaoId: divisao.id, secaoId: '' }));
 
-  const lista = data.scripts.filter((script) => {
+  const lista = dados.scripts.filter((script) => {
     if (linguagem && script.linguagem !== linguagem) return false;
     if (secaoId && script.secaoId !== secaoId) return false;
     if (termo) {
@@ -187,8 +236,12 @@ export default function ScriptsView() {
       danger: true
     });
     if (!ok) return;
-    removeScript(script.id);
-    toast('Script excluído.');
+    try {
+      await removeScript(script.id);
+      toast('Script excluído.');
+    } catch (erro) {
+      toast(mensagemErro(erro), 'error');
+    }
   };
 
   return (
@@ -199,9 +252,11 @@ export default function ScriptsView() {
           <p>Automações e comandos úteis do dia a dia.</p>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" type="button" onClick={() => setFormulario({ script: null })}>
-            Novo script
-          </button>
+          {podeCriar ? (
+            <button className="btn btn-primary" type="button" onClick={() => setFormulario({ script: null })}>
+              Novo script
+            </button>
+          ) : null}
         </div>
       </div>
       <div className="toolbar">
@@ -241,7 +296,7 @@ export default function ScriptsView() {
             onChange={(event) => setSecaoId(event.target.value)}
           >
             <option value="">Todas as seções</option>
-            {data.secoes.map((secao) => (
+            {dados.secoes.map((secao) => (
               <option value={secao.id} key={secao.id}>
                 {secao.nome}
               </option>
@@ -252,7 +307,9 @@ export default function ScriptsView() {
       <div className="grid grid-scripts" id="scripts-lista">
         {lista.length ? (
           lista.map((script) => {
-            const secao = data.secoes.find((item) => item.id === script.secaoId);
+            const secao = dados.secoes.find((item) => item.id === script.secaoId);
+            const editavel = podeEditarItem(usuario, script);
+            const excluivel = podeExcluirItem(usuario, script);
             return (
               <article className="card script-card" data-id={script.id} key={script.id}>
                 <div className="script-head">
@@ -283,20 +340,24 @@ export default function ScriptsView() {
                     <button className="btn btn-sm" type="button" onClick={() => copiar(script.codigo)}>
                       Copiar
                     </button>
-                    <button
-                      className="btn btn-sm btn-ghost"
-                      type="button"
-                      onClick={() => setFormulario({ script })}
-                    >
-                      Editar
-                    </button>
-                    <button
-                      className="btn btn-sm btn-ghost btn-icon-danger"
-                      type="button"
-                      onClick={() => excluir(script)}
-                    >
-                      Excluir
-                    </button>
+                    {editavel ? (
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        type="button"
+                        onClick={() => setFormulario({ script })}
+                      >
+                        Editar
+                      </button>
+                    ) : null}
+                    {excluivel ? (
+                      <button
+                        className="btn btn-sm btn-ghost btn-icon-danger"
+                        type="button"
+                        onClick={() => excluir(script)}
+                      >
+                        Excluir
+                      </button>
+                    ) : null}
                   </span>
                 </div>
               </article>

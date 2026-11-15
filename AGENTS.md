@@ -2,62 +2,65 @@
 
 ## Project
 
-IT management panel built with Next.js (App Router, Turbopack), React and TypeScript (strict). Client-only app: there is no backend, API route or database; all data lives in the browser's `localStorage`. UI text is Brazilian Portuguese.
+IT management panel ("Kagebunshin") built with Next.js 16.2.12 (App Router, Turbopack), React 19, TypeScript (strict) and PostgreSQL (via `pg`, raw SQL, no ORM). Multi-user with email/password and Google login, cookie sessions stored in the database and role-based permissions. UI text is Brazilian Portuguese.
 
 ## Commands
 
 ```bash
 npm install
+npm run db:up
+npm run db:setup
 npm run dev
 npm run build
 npm start
 npm run typecheck
 ```
 
-There is no lint, formatter or test runner configured. Validate changes with `npm run typecheck` and `npm run build`.
+- `db:up` starts Postgres from `docker-compose.yml`; `db:setup` applies `db/schema.sql` and seeds (idempotent, safe to re-run).
+- There is no lint, formatter or test runner configured. Validate changes with `npm run typecheck` and `npm run build`.
+
+## Environment
+
+Copy `.env.example` to `.env` (gitignored). `DATABASE_URL`, `APP_URL`, `ADMIN_NOME`/`ADMIN_EMAIL`/`ADMIN_PASSWORD` (used only by `db:setup` to create the admin), `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (optional; without them the Google button is disabled). The Google OAuth redirect URI is `${APP_URL}/api/auth/google/callback`. Never print or commit `.env`.
+
+## Roles and permissions
+
+- `admin`: exactly one (enforced by the partial unique index `usuarios_um_admin`); can do everything, including divisões, kanban columns and users/roles. `admin` is never assignable through the API.
+- `gestor`: bound to one divisão; creates/edits/deletes seções and items of that divisão, and manages users with papel `usuario` inside it.
+- `usuario`: bound to one seção; reads the whole divisão, creates/edits missões, wiki and scripts (including moving missões between columns) only in their own seção; never deletes.
+- Users without divisão (self sign-up or first Google login) are pending and see empty lists until an admin/gestor assigns them.
+- `src/lib/permissoes.ts` is the single source of truth: route handlers enforce it with rows loaded from the database, views use the same functions only to hide/disable actions. Change rules there, never only in the UI.
 
 ## Layout
 
-- `src/app/` — one folder per route (`inicio`, `secoes`, `missoes`, `wiki`, `scripts`, `configuracoes`, `perfil`). Each `page.tsx` is a thin server component that only exports `metadata` and renders the matching view.
-- `src/app/layout.tsx` — root layout, inline theme script, `Providers` + `AppShell`.
-- `src/app/globals.css` — all styling (single stylesheet, CSS custom properties, `[data-theme="dark"]` overrides, no CSS modules/Tailwind).
-- `src/components/views/*View.tsx` — the client component holding each page's UI and logic.
-- `src/components/AppShell.tsx` — sidebar nav (`NAV`), topbar title map (`TITULOS`), theme toggle, mobile drawer.
-- `src/components/DataProvider.tsx` — `useData()`: loads/persists `AppData`, exposes actions, applies the theme.
-- `src/components/UIProvider.tsx` — `useUI()` with `toast()` and async `confirm()`, plus the reusable `Modal` component.
-- `src/lib/store.ts` — pure, immutable data transforms (seed, CRUD, `moveMissao`, `moveColuna`, import validation, `STORAGE_KEY`).
-- `src/lib/types.ts` — domain types (`AppData`, `Secao`, `Coluna`, `Missao`, `WikiPage`, `Script`, `Profile`, `Tema`, `Prioridade`).
-- `src/lib/markdown.ts` — minimal safe markdown renderer for the wiki.
+- `src/app/page.tsx`, `login/`, `cadastro/` — public landing page and auth pages.
+- `src/app/(painel)/` — authenticated routes (`inicio`, `secoes`, `missoes`, `wiki`, `scripts`, `usuarios`, `configuracoes`, `perfil`); its `layout.tsx` checks the session server-side and redirects to `/login`. Each `page.tsx` only exports `metadata` and renders a view.
+- `src/app/api/**/route.ts` — REST handlers (JSON camelCase, errors as `{ erro }` in Portuguese).
+- `src/lib/server/` — server-only code: `db.ts` (pool, `query`, `transaction`), `sessao.ts` (cookie `kb_sessao`, sha256-hashed tokens in `sessoes`), `senha.ts` (scrypt), `http.ts` (`exigirUsuario`, `verificarOrigem`, `erro`), `appUrl.ts`. Never import these from client components.
+- `src/components/DataProvider.tsx` — `useData()`: loads `GET /api/dados`, exposes async actions calling the API, the session user and the theme.
+- `src/components/UIProvider.tsx` — `useUI()` with `toast()`, async `confirm()` and the `Modal` component.
+- `src/components/views/*View.tsx` — client UI per page.
+- `src/lib/types.ts`, `src/lib/store.ts` (pure helpers), `src/lib/markdown.ts` (safe wiki renderer), `src/app/globals.css` (single stylesheet, CSS variables, `[data-theme="dark"]`).
+- `db/schema.sql`, `scripts/db-setup.mjs` — schema and seed.
 
 ## Domain vocabulary
 
-Identifiers and UI use Portuguese terms; keep them consistent:
-
-- `secao` = section/area of IT, `missao` = task card on the kanban, `coluna` = kanban column, `responsavel` = assignee, `prazo` = due date (`YYYY-MM-DD` or `''`), `ordem` = position inside a column.
-- The **last column** in `colunas` is treated as "done" (open vs. completed counts on Início depend on it).
-- Items with `secaoId: ''` are shown as "Sem seção"; deleting a seção unlinks its items instead of deleting them.
+- `divisao` = division (has seções), `secao` = section, `missao` = kanban card, `coluna` = kanban column (global, ordered by `posicao`), `responsavel` = assignee, `prazo` = due date (`YYYY-MM-DD` or `''`), `ordem` = position inside a column, `papel` = role.
+- The last column is treated as "done" in Início counts.
+- Items always have `divisao_id`; `secao_id` may be null ("Sem seção"). Deleting a seção unlinks its items; deleting a divisão is refused while it has seções, users or items.
 
 ## Conventions
 
-- Data changes go through `src/lib/store.ts` as pure functions returning a new `AppData`, then are exposed as actions in `DataProvider`. Do not call `localStorage` from views.
-- Use `useUI().confirm()` and `toast()` for dialogs/feedback; never `window.confirm`/`alert`.
-- Use the `Modal` component from `UIProvider` for forms.
-- Render user content as JSX text. `dangerouslySetInnerHTML` is only allowed for the theme script in `layout.tsx` and the output of `renderMarkdown` (which escapes HTML first) — keep it that way.
-- Colors coming from user data must pass through `safeColor` (`src/lib/utils.ts`) before being used in styles.
-- Do not add code comments.
-- Imports use the `@/` alias for `src/`.
-- No external UI, styling or state libraries; keep dependencies minimal. `next` is pinned to an exact version on purpose.
-
-## Adding a route
-
-1. Create `src/app/<rota>/page.tsx` exporting `metadata = { title }` and rendering a new `src/components/views/<Nome>View.tsx` (`'use client'`).
-2. Add the entry to `NAV` (with inline SVG icon) and `TITULOS` in `AppShell.tsx`.
-3. If the view uses `useSearchParams`, wrap it in `<Suspense>` in `page.tsx` (as `missoes/page.tsx` does), otherwise `next build` fails.
+- Mutating handlers must call `verificarOrigem`, `exigirUsuario` and the permission functions; derive `divisaoId` from the seção on the server instead of trusting the client.
+- Schema changes go in `db/schema.sql` written idempotently (`IF NOT EXISTS`, guarded `ALTER`), since `db:setup` re-runs it on existing databases.
+- Use `useUI().confirm()`/`toast()`, never `window.confirm`/`alert`; forms use `Modal`.
+- Render user content as JSX text. `dangerouslySetInnerHTML` only for the theme script in `layout.tsx` and `renderMarkdown` output. User colors go through `safeColor`.
+- No code comments. Imports use `@/`. No external UI, styling, state or auth libraries; `next` stays pinned to an exact version.
+- New panel route: add `src/app/(painel)/<rota>/page.tsx` + view, then `NAV` and `TITULOS` in `AppShell.tsx`. Views using `useSearchParams` need `<Suspense>` in `page.tsx`.
 
 ## Gotchas
 
-- Persisted shape is versioned by the key `kagebunshin:data:v1`. Changing `AppData` requires updating `normalize()`/`validateImport()` in `store.ts` so existing browser data and imported JSON still load; bump the key only for breaking changes.
-- `DataProvider` renders "Carregando..." until it has read `localStorage` (`hydrated`), to avoid hydration mismatches. Views can assume data is loaded; do not read `localStorage` during server render.
-- The theme is applied before paint by the inline script in `layout.tsx`, which duplicates the storage key and theme resolution logic. Keep it in sync with `DataProvider` when changing either.
-- `/` → `/inicio` is handled by `redirects()` in `next.config.ts` (real 307). `redirect()` in `src/app/page.tsx` alone returns 200 with a client-side redirect.
-- Kanban drag-and-drop uses native HTML5 DnD; the "Coluna" select in the card edit modal is the keyboard/touch fallback and must keep working.
+- In route handlers, set cookies on a `NextResponse` (`res.cookies.set`) when returning a redirect; `Response.redirect` has immutable headers and drops them.
+- The theme preference lives in `localStorage` key `kagebunshin:tema` and is applied before paint by the inline script in `src/app/layout.tsx`; keep it in sync with `DataProvider`.
+- Behind the Codespaces proxy the `Host` header is not the public host: `APP_URL` must be the public URL for Google redirects and secure cookies, and `verificarOrigem` compares against `x-forwarded-host`.
+- Kanban drag-and-drop uses native HTML5 DnD; the "Coluna" select in the card modal is the keyboard/touch fallback and must keep working.

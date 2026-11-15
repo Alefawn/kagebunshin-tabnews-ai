@@ -1,15 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useData } from './DataProvider';
 import { useUI } from './UIProvider';
+import { podeGerenciarUsuarios } from '@/lib/permissoes';
+import { PAPEIS } from '@/lib/store';
 import { initials } from '@/lib/utils';
 
 interface NavItem {
   href: string;
   label: string;
+  restrito?: boolean;
   icon: ReactNode;
 }
 
@@ -70,6 +73,19 @@ const NAV: NavItem[] = [
     )
   },
   {
+    href: '/usuarios',
+    label: 'Usuários',
+    restrito: true,
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="9" cy="8" r="3.2" />
+        <path d="M3.5 20c0-3 2.5-5.2 5.5-5.2s5.5 2.2 5.5 5.2" />
+        <path d="M16.5 5.2a3.2 3.2 0 0 1 0 5.6" />
+        <path d="M18 14.9c1.6.7 2.6 2.2 2.6 4.1" />
+      </svg>
+    )
+  },
+  {
     href: '/configuracoes',
     label: 'Configurações',
     icon: (
@@ -87,16 +103,19 @@ const TITULOS: Record<string, string> = {
   '/missoes': 'Missões',
   '/wiki': 'Wiki',
   '/scripts': 'Scripts',
+  '/usuarios': 'Usuários',
   '/configuracoes': 'Configurações',
   '/perfil': 'Perfil'
 };
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { data, setTheme } = useData();
+  const router = useRouter();
+  const { usuario, tema, setTema, sair } = useData();
   const { toast } = useUI();
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [temaResolvido, setTemaResolvido] = useState<'light' | 'dark'>('light');
+  const [saindo, setSaindo] = useState(false);
 
   useEffect(() => {
     setDrawerAberto(false);
@@ -121,12 +140,23 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   const titulo = TITULOS[pathname] || 'Início';
-  const perfil = data.profile;
+  const itens = NAV.filter((item) => !item.restrito || podeGerenciarUsuarios(usuario));
 
   const alternarTema = () => {
-    const atual = document.documentElement.getAttribute('data-theme');
-    setTheme(atual === 'dark' ? 'light' : 'dark');
+    setTema(temaResolvido === 'dark' ? 'light' : 'dark');
     toast('Tema atualizado.');
+  };
+
+  const sairDoPainel = async () => {
+    setSaindo(true);
+    try {
+      await sair();
+    } catch {
+      setSaindo(false);
+      return;
+    }
+    router.replace('/login');
+    router.refresh();
   };
 
   return (
@@ -147,7 +177,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="nav">
-          {NAV.map((item) => (
+          {itens.map((item) => (
             <Link
               key={item.href}
               className={'nav-item' + (pathname === item.href ? ' active' : '')}
@@ -167,11 +197,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
             onClick={() => setDrawerAberto(false)}
           >
             <span className="avatar" aria-hidden="true">
-              {initials(perfil.nome)}
+              {initials(usuario.nome)}
             </span>
             <span className="user-meta">
-              <strong>{perfil.nome || 'Sem nome'}</strong>
-              <small>{perfil.cargo || 'Sem cargo'}</small>
+              <strong>{usuario.nome || 'Sem nome'}</strong>
+              <small>{PAPEIS[usuario.papel]}</small>
             </span>
           </Link>
           <button
@@ -186,6 +216,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </svg>
             <svg className="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8Z" />
+            </svg>
+          </button>
+          <button
+            className="icon-btn"
+            type="button"
+            onClick={sairDoPainel}
+            disabled={saindo}
+            aria-label="Sair"
+            title="Sair"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />
+              <path d="m10 8-4 4 4 4" />
+              <path d="M6 12h9" />
             </svg>
           </button>
         </div>
