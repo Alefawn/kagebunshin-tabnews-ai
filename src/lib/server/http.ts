@@ -1,5 +1,6 @@
 import type { UsuarioSessao } from '@/lib/types';
 import { usuarioAtual } from './sessao';
+import { appUrl } from './appUrl';
 
 export function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
@@ -24,8 +25,11 @@ export function verificarOrigem(request: Request): boolean {
   } catch {
     return false;
   }
-  const esperado = request.headers.get('x-forwarded-host') || request.headers.get('host');
-  return Boolean(esperado) && host === esperado;
+  const permitidos = [request.headers.get('x-forwarded-host'), request.headers.get('host')];
+  try {
+    permitidos.push(new URL(appUrl()).host);
+  } catch {}
+  return permitidos.some((esperado) => Boolean(esperado) && esperado === host);
 }
 
 export async function lerJson(request: Request): Promise<Record<string, unknown>> {
